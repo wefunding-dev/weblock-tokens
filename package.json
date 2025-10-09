@@ -1,0 +1,20 @@
+{
+  "name": "wft-token",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "compile": "hardhat compile",
+    "deploy:fuji": "hardhat run --network fuji scripts/deploy-wft.cjs",
+    "verify:fuji": "hardhat verify --network fuji"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "dotenv": "^16.4.5",
+    "hardhat": "^2.22.10",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.2"
+  }
+}
