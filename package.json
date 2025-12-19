@@ -1,20 +1,27 @@
 {
-  "name": "wft-token",
-  "version": "1.0.0",
-  "license": "MIT",
+  "name": "weblock-contracts",
+  "private": true,
   "type": "module",
   "scripts": {
+    "clean": "rimraf artifacts cache typechain",
+    "build": "npm run clean && hardhat compile",
     "compile": "hardhat compile",
-    "deploy:fuji": "hardhat run --network fuji scripts/deploy-wft.cjs",
-    "verify:fuji": "hardhat verify --network fuji"
+    "test": "hardhat test",
+    "typechain": "hardhat compile && typechain",
+    "lint:sol": "solhint 'contracts/**/*.sol'"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
-    "dotenv": "^16.4.5",
-    "hardhat": "^2.22.10",
-    "typescript": "^5.4.0"
+    "@openzeppelin/contracts": "^5.0.0",
+    "@openzeppelin/contracts-upgradeable": "^5.0.0",
+    "@openzeppelin/hardhat-upgrades": "^3.9.1",
+    "@types/node": "^25.0.3",
+    "hardhat": "^2.22.0",
+    "rimraf": "^6.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@openzeppelin/contracts": "^5.0.2"
+    "dotenv": "^17.2.3"
   }
 }

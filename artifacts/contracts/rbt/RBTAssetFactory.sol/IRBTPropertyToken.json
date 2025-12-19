@@ -1,0 +1,44 @@
+{
+  "_format": "hh-sol-artifact-1",
+  "contractName": "IRBTPropertyToken",
+  "sourceName": "contracts/rbt/RBTAssetFactory.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "assetName",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "assetSymbol",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "assetLabel",
+          "type": "string"
+        },
+        {
+          "internalType": "address",
+          "name": "settlementToken",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "admin",
+          "type": "address"
+        }
+      ],
+      "name": "initialize",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "linkReferences": {},
+  "deployedLinkReferences": {}
+}
