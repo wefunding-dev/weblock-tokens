@@ -1,7 +1,9 @@
+// contracts/rbt/RBTAssetFactory.sol
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/proxy/Clones.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 
 interface IRBTPropertyToken {
     function initialize(
@@ -13,29 +15,32 @@ interface IRBTPropertyToken {
     ) external;
 }
 
-contract RBTAssetFactory {
+contract RBTAssetFactory is AccessControl {
     using Clones for address;
+
+    bytes32 public constant CREATOR_ROLE = keccak256("CREATOR_ROLE");
 
     address public immutable implementation;
     address[] public allAssets;
 
     event AssetCreated(address indexed asset, string assetName, string assetLabel, address settlementToken);
 
-    constructor(address _implementation) {
+    constructor(address _implementation, address admin) {
         implementation = _implementation;
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(CREATOR_ROLE, admin);
     }
 
     function createAsset(
-        string calldata assetName,      // "Starbucks Yeoksam Store"
-        string calldata assetSymbol,    // "RBT-SB-YS"
-        string calldata assetLabel,     // "스타벅스 역삼점"
-        address settlementToken,        // USDR
+        string calldata assetName,
+        string calldata assetSymbol,
+        string calldata assetLabel,
+        address settlementToken,
         address admin
-    ) external returns (address asset) {
+    ) external onlyRole(CREATOR_ROLE) returns (address asset) {
         asset = implementation.clone();
         IRBTPropertyToken(asset).initialize(assetName, assetSymbol, assetLabel, settlementToken, admin);
         allAssets.push(asset);
-
         emit AssetCreated(asset, assetName, assetLabel, settlementToken);
     }
 

@@ -1,3 +1,4 @@
+// contracts/rbt/RBTPropertyToken.sol
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
@@ -7,47 +8,49 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
 
 /**
  * RBTPropertyToken
- * - 1 Asset = 1 Contract (e.g., "스타벅스 역삼점")
- * - Series/Tranche = tokenId (e.g., 1호/2호/3호)
+ * - 1 Asset = 1 Contract
+ * - Series/Tranche = tokenId
  * - KYC whitelist-gated transfer
  * - Revenue distribution (USDR) per tokenId via cumulative-per-share accounting
  */
 contract RBTPropertyToken is ERC1155Supply, AccessControl, Pausable, ReentrancyGuard {
-    // ========== Roles ==========
-    bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE"); // 운영/정산/분배
-    bytes32 public constant ISSUER_ROLE   = keccak256("ISSUER_ROLE");   // 상품 생성/발행
+    bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
+    bytes32 public constant ISSUER_ROLE   = keccak256("ISSUER_ROLE");
 
-    // ========== Asset Metadata ==========
-    string public assetName;     // e.g., "Starbucks Yeoksam Store"
-    string public assetSymbol;   // e.g., "RBT-SB-YS"
-    string public assetLabel;    // e.g., "스타벅스 역삼점"
+    string public assetName;
+    string public assetSymbol;
+    string public assetLabel;
 
     IERC20 public settlementToken; // USDR
 
-    // ========== Compliance ==========
-    mapping(address => bool) public whitelisted; // KYC 완료 주소
-    mapping(address => bool) public frozen;      // 전송/수령 금지
-    mapping(address => bool) public blacklisted; // 영구 차단
+    // Metadata base URI
+    string public baseURI;
 
-    // ========== Series (tokenId) ==========
+    mapping(address => bool) public whitelisted;
+    mapping(address => bool) public frozen;
+    mapping(address => bool) public blacklisted;
+
     struct Series {
-        string label;       // "1호"
+        string label;
         uint256 unitPrice;  // 회계/정산 기준 단가 (예: 1,000,000)
-        uint256 maxSupply;  // 발행 상한
+        uint256 maxSupply;
         bool active;
     }
 
-    uint256 public nextSeriesId;                 // tokenId auto-increment
-    mapping(uint256 => Series) public series;    // tokenId => Series
+    uint256 public nextSeriesId;
+    mapping(uint256 => Series) public series;
 
-    // ========== Revenue Distribution ==========
     // cumulativeRevenuePerToken[tokenId] scaled by 1e18
     mapping(uint256 => uint256) public cumulativeRevenuePerToken;
     // userRevenueCredited[tokenId][account] scaled by 1e18
     mapping(uint256 => mapping(address => uint256)) public userRevenueCredited;
+
+    // Transfer-safe revenue accounting
+    mapping(uint256 => mapping(address => uint256)) public pendingRevenue;
 
     event WhitelistUpdated(address indexed account, bool allowed);
     event FrozenUpdated(address indexed account, bool frozen);
@@ -60,12 +63,11 @@ contract RBTPropertyToken is ERC1155Supply, AccessControl, Pausable, ReentrancyG
     event RevenueDeposited(uint256 indexed tokenId, uint256 amount, uint256 newCumulativePerToken);
     event RevenueClaimed(uint256 indexed tokenId, address indexed account, uint256 amount);
 
-    // ========== Init (for clone) ==========
+    event BaseURIUpdated(string baseURI);
+
     bool private _initialized;
 
-    constructor() ERC1155("") {
-        // implementation contract: do nothing
-    }
+    constructor() ERC1155("") {}
 
     function initialize(
         string calldata _assetName,
@@ -86,13 +88,15 @@ contract RBTPropertyToken is ERC1155Supply, AccessControl, Pausable, ReentrancyG
         _grantRole(OPERATOR_ROLE, admin);
         _grantRole(ISSUER_ROLE, admin);
 
-        // 운영 편의상 admin 기본 whitelist
         whitelisted[admin] = true;
-
         nextSeriesId = 1;
     }
 
-    // ========== Admin / Compliance ==========
+    function setBaseURI(string calldata uri_) external onlyRole(OPERATOR_ROLE) {
+        baseURI = uri_;
+        emit BaseURIUpdated(uri_);
+    }
+
     function setWhitelist(address account, bool allowed) external onlyRole(OPERATOR_ROLE) {
         whitelisted[account] = allowed;
         emit WhitelistUpdated(account, allowed);
@@ -111,20 +115,14 @@ contract RBTPropertyToken is ERC1155Supply, AccessControl, Pausable, ReentrancyG
     function pause() external onlyRole(OPERATOR_ROLE) { _pause(); }
     function unpause() external onlyRole(OPERATOR_ROLE) { _unpause(); }
 
-    // ========== Series management ==========
     function createSeries(
-        string calldata label,      // "1호"
-        uint256 unitPrice,          // 1,000,000 (예: 원 단위)
+        string calldata label,
+        uint256 unitPrice,
         uint256 maxSupply
     ) external onlyRole(ISSUER_ROLE) returns (uint256 tokenId) {
         require(maxSupply > 0, "maxSupply=0");
         tokenId = nextSeriesId++;
-        series[tokenId] = Series({
-            label: label,
-            unitPrice: unitPrice,
-            maxSupply: maxSupply,
-            active: true
-        });
+        series[tokenId] = Series({ label: label, unitPrice: unitPrice, maxSupply: maxSupply, active: true });
         emit SeriesCreated(tokenId, label, unitPrice, maxSupply);
     }
 
@@ -134,12 +132,7 @@ contract RBTPropertyToken is ERC1155Supply, AccessControl, Pausable, ReentrancyG
         emit SeriesStatusChanged(tokenId, active);
     }
 
-    // ========== Issuance ==========
-    function issue(
-        uint256 tokenId,
-        address to,
-        uint256 amount
-    ) external onlyRole(ISSUER_ROLE) {
+    function issue(uint256 tokenId, address to, uint256 amount) external onlyRole(ISSUER_ROLE) {
         Series memory s = series[tokenId];
         require(bytes(s.label).length != 0, "series not found");
         require(s.active, "series inactive");
@@ -150,18 +143,11 @@ contract RBTPropertyToken is ERC1155Supply, AccessControl, Pausable, ReentrancyG
         emit Issued(tokenId, to, amount);
     }
 
-    // ========== Revenue ==========
-    /**
-     * depositRevenue(tokenId, amount)
-     * - OPERATOR가 USDR를 본 컨트랙트로 전송(approve 필요)
-     * - tokenId별 총 공급량 기준으로 cumulativeRevenuePerToken 증가
-     */
     function depositRevenue(uint256 tokenId, uint256 amount) external onlyRole(OPERATOR_ROLE) {
         require(amount > 0, "amount=0");
         require(totalSupply(tokenId) > 0, "no supply");
         require(bytes(series[tokenId].label).length != 0, "series not found");
 
-        // pull tokens
         require(settlementToken.transferFrom(msg.sender, address(this), amount), "transferFrom failed");
 
         uint256 inc = (amount * 1e18) / totalSupply(tokenId);
@@ -172,14 +158,14 @@ contract RBTPropertyToken is ERC1155Supply, AccessControl, Pausable, ReentrancyG
 
     function claimable(uint256 tokenId, address account) public view returns (uint256) {
         uint256 bal = balanceOf(account, tokenId);
-        if (bal == 0) return 0;
-
         uint256 cumulative = cumulativeRevenuePerToken[tokenId];
         uint256 credited = userRevenueCredited[tokenId][account];
-        if (cumulative <= credited) return 0;
 
-        uint256 delta = cumulative - credited;
-        return (bal * delta) / 1e18;
+        uint256 live = 0;
+        if (bal > 0 && cumulative > credited) {
+            live = (bal * (cumulative - credited)) / 1e18;
+        }
+        return pendingRevenue[tokenId][account] + live;
     }
 
     function claim(uint256 tokenId) external nonReentrant whenNotPaused {
@@ -188,11 +174,24 @@ contract RBTPropertyToken is ERC1155Supply, AccessControl, Pausable, ReentrancyG
         uint256 amount = claimable(tokenId, msg.sender);
         require(amount > 0, "nothing to claim");
 
-        // update credit first
+        pendingRevenue[tokenId][msg.sender] = 0;
         userRevenueCredited[tokenId][msg.sender] = cumulativeRevenuePerToken[tokenId];
 
         require(settlementToken.transfer(msg.sender, amount), "transfer failed");
         emit RevenueClaimed(tokenId, msg.sender, amount);
+    }
+
+    function _accrue(uint256 tokenId, address account) internal {
+        if (account == address(0)) return;
+        uint256 bal = balanceOf(account, tokenId);
+        uint256 cumulative = cumulativeRevenuePerToken[tokenId];
+        uint256 credited = userRevenueCredited[tokenId][account];
+
+        if (bal > 0 && cumulative > credited) {
+            uint256 delta = cumulative - credited;
+            pendingRevenue[tokenId][account] += (bal * delta) / 1e18;
+        }
+        userRevenueCredited[tokenId][account] = cumulative;
     }
 
     function _update(
@@ -201,27 +200,28 @@ contract RBTPropertyToken is ERC1155Supply, AccessControl, Pausable, ReentrancyG
         uint256[] memory ids,
         uint256[] memory values
     ) internal override(ERC1155Supply) whenNotPaused {
-        // Mint
+        for (uint256 i = 0; i < ids.length; i++) {
+            uint256 tokenId = ids[i];
+            if (from != address(0)) _accrue(tokenId, from);
+            if (to != address(0)) _accrue(tokenId, to);
+        }
+
         if (from == address(0)) {
             require(_canReceive(to), "receiver not allowed");
             super._update(from, to, ids, values);
             return;
         }
 
-        // Burn
         if (to == address(0)) {
             require(_canAct(from), "sender not allowed");
             super._update(from, to, ids, values);
             return;
         }
 
-        // Transfer
         require(_canAct(from), "sender not allowed");
         require(_canReceive(to), "receiver not allowed");
-
         super._update(from, to, ids, values);
     }
-
 
     function _canAct(address a) internal view returns (bool) {
         if (blacklisted[a]) return false;
@@ -231,18 +231,15 @@ contract RBTPropertyToken is ERC1155Supply, AccessControl, Pausable, ReentrancyG
     }
 
     function _canReceive(address a) internal view returns (bool) {
-        // same rules for receive in this model
         return _canAct(a);
     }
 
-    // ========== Metadata ==========
-    // 운영 시 tokenId별 URI를 별도 구성하려면 override해서 tokenId 기반 JSON으로 연결 가능
-    function uri(uint256) public view override returns (string memory) {
-        return ""; // 필요 시 "ipfs://.../{id}.json" 형태로 확장
+    function uri(uint256 tokenId) public view override returns (string memory) {
+        if (bytes(baseURI).length == 0) return "";
+        return string.concat(baseURI, Strings.toString(tokenId));
     }
 
     function supportsInterface(bytes4 interfaceId) public view override(ERC1155, AccessControl) returns (bool) {
         return super.supportsInterface(interfaceId);
     }
-
 }
